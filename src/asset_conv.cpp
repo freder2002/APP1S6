@@ -12,13 +12,18 @@
 #include <string>
 #include <cstring>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
 
 namespace gif643
 {
 
+std::mutex mutex;
+std::condition_variable data_condition;
+
     const size_t BPP = 4;         // Bytes per pixel
     const float ORG_WIDTH = 48.0; // Original SVG image width in px.
-    const int NUM_THREADS = 1;    // Default value, changed by argv.
+    const int NUM_THREADS = 24;    // Default value, changed by argv.
 
     using PNGDataVec = std::vector<char>;
     using PNGDataPtr = std::shared_ptr<PNGDataVec>;
@@ -114,6 +119,7 @@ namespace gif643
     {
     private:
         TaskDef task_def_;
+        std::mutex mutex_runner;
 
     public:
         TaskRunner(const TaskDef &task_def) : task_def_(task_def)
@@ -138,8 +144,10 @@ namespace gif643
             NSVGimage *image_in = nullptr;
             NSVGrasterizer *rast = nullptr;
 
+         
             try
             {
+                std::lock_guard<std::mutex>  lock(mutex_runner);
                 // Read the file ...
                 image_in = nsvgParseFromFile(fname_in.c_str(), "px", 0);
                 if (image_in == nullptr)
@@ -169,6 +177,8 @@ namespace gif643
                 std::ofstream file_out(fname_out, std::ofstream::binary);
                 auto data = writer.getData();
                 file_out.write(&(data->front()), data->size());
+
+                // add to hash map
             }
             catch (std::runtime_error e)
             {
@@ -252,8 +262,10 @@ namespace gif643
             should_run_ = false;
             for (auto &qthread : queue_threads_)
             {
+                data_condition.notify_all();
                 qthread.join();
             }
+            
         }
 
         /// \brief Parse a task definition string and fills the references TaskDef
@@ -303,8 +315,14 @@ namespace gif643
             TaskDef def;
             if (parse(line_org, def))
             {
+                std::string str = def.fname_in + def.fname_out + std::to_string(def.size);
+                if(png_cache_.find(str) == png_cache_.end())
+                {
+                std::cerr << "f" << std::endl;
                 TaskRunner runner(def);
                 runner();
+                }
+                
             }
         }
 
@@ -312,6 +330,7 @@ namespace gif643
         ///
         /// If the definition is invalid, error messages are sent to stderr and
         /// nothing is queued.
+        // # producteur
         void parseAndQueue(const std::string &line_org)
         {
             std::queue<TaskDef> queue;
@@ -319,7 +338,9 @@ namespace gif643
             if (parse(line_org, def))
             {
                 std::cerr << "Queueing task '" << line_org << "'." << std::endl;
+                std::lock_guard<std::mutex> lock(mutex);
                 task_queue_.push(def);
+                data_condition.notify_one();
             }
         }
 
@@ -327,6 +348,7 @@ namespace gif643
         bool queueEmpty()
         {
             return task_queue_.empty();
+            exit(0);
         }
 
     private:
@@ -335,13 +357,17 @@ namespace gif643
         {
             while (should_run_)
             {
-                if (!task_queue_.empty())
-                {
-                    TaskDef task_def = task_queue_.front();
-                    task_queue_.pop();
-                    TaskRunner runner(task_def);
-                    runner();
-                }
+
+                std::unique_lock<std::mutex> lock(mutex);
+                data_condition.wait(lock, [&] {return !task_queue_.empty() || !should_run_;});
+               if(should_run_){
+                TaskDef task_def = task_queue_.front();
+                task_queue_.pop();
+                lock.unlock();
+                TaskRunner runner(task_def);
+                runner();
+               }
+                
             }
         }
     };
@@ -354,31 +380,18 @@ int main(int argc, char **argv)
 
     std::ifstream file_in;
 
-    if (argc >= 3 && (strcmp(argv[1], "-") != 0))
+    int nb_thread = NUM_THREADS;
+
+    if (argc >= 3 && (strcmp(argv[2], "-t") != 0))
     {
         char *p;
-        int input = strtol(argv[1], &p, 10);
-        int nb_thread = NUM_THREADS;
+        int input = strtol(argv[3], &p, 10);
+        
         if (input > 0 && input < 48)
             nb_thread = input;
-            std::cout << nb_thread << std::endl;
 
-        file_in.open(argv[1]);
-        if (file_in.is_open())
-        {
-            std::cin.rdbuf(file_in.rdbuf());
-            std::cerr << "Using " << argv[1] << "..." << std::endl;
-        }
-        else
-        {
-            std::cerr << "Error: Cannot open '"
-                      << argv[1]
-                      << "', using stdin (press CTRL-D for EOF)."
-                      << std::endl;
-        }
-    }
-    else if (argc >= 2 && (strcmp(argv[1], "-") != 0))
-    {
+
+        std::cout << "NB threads = " << nb_thread << std::endl;
         file_in.open(argv[1]);
         if (file_in.is_open())
         {
@@ -400,7 +413,7 @@ int main(int argc, char **argv)
     }
 
     // TODO: change the number of threads from args.
-    Processor proc;
+    Processor proc(48);
 
     while (!std::cin.eof())
     {
