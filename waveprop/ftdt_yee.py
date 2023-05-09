@@ -31,22 +31,8 @@ def curl_H(H):
     curl_H[:,1:,:,2] -= H[:,1:,:,0] - H[:,:-1,:,0]
     return curl_H
 
-FNAME       = "APP-smh"
-MATRIX_SIZE = 4
-
 def subp():
-
-    # define de bases calle au demarrage seulement
     subproc = Popen(["./app", FNAME], stdin=PIPE, stdout=PIPE)
-
-    shared_matrix = numpy.ndarray(shape=(MATRIX_SIZE, MATRIX_SIZE), dtype=numpy.float64, buffer=shm_mm)
-    shared_matrix[:] = [[1,2,3,4], [5,6,7,8], [9,10,11,12], [13,14,15,16]]
-    print("PY:  Initial matrix:")
-    print(shared_matrix)
-
-    shm_f = open(FNAME, "r+b")
-    shm_mm = mmap.mmap(shm_f.fileno(), 0)
-
     return subproc
 
 def signal_and_wait(subproc):
@@ -55,13 +41,44 @@ def signal_and_wait(subproc):
     res = subproc.stdout.readline()
     #print(res)
 
+FNAME       = "APP-shm"
+MATRIX_SIZE = 100
+
+# Lancement de l'exécutable associé
+# NOTE: suppose que l'exécutable est dans le même dossier que celui en cours (normalement build/)
+subproc = subp()
+
+# Envoi d'une ligne sur l'entrée du sous-processus et attend un retour pour signaler que
+# nous sommes prêts à passer à la prochaine étape. 
+signal_and_wait(subproc)
+
+shm_f = open(FNAME, "r+b")
+shm_mm = mmap.mmap(shm_f.fileno(), 0)
 
 def timestep(E, H, courant_number, source_pos, source_val):
     # methode
     
-    signal_and_wait(subproc)
+    # print(courant_number, source_pos, source_val)
 
-    # # ancienne methode 
+    shared_matrix = numpy.ndarray(shape=(2,3,MATRIX_SIZE, MATRIX_SIZE,MATRIX_SIZE), dtype=numpy.float64, buffer=shm_mm)
+    # print(shared_matrix)
+
+    # print(source_pos)
+    shared_matrix[0,0,0,0,0] = courant_number
+    shared_matrix[0,0,0,0,1] = source_pos[0][0]
+    shared_matrix[0,0,0,0,2] = source_pos[1][0]
+    shared_matrix[0,0,0,0,3] = source_pos[2][0]
+    shared_matrix[0,0,0,0,4] = source_pos[3][0]
+    shared_matrix[0,0,0,0,5] = source_val  
+
+
+    signal_and_wait(subproc)
+    E = shared_matrix[:,:,:,:,0]
+    H = shared_matrix[:,:,:,:,1]
+
+    print(E)
+    print(H)
+    # ancienne methode 
     # E += courant_number * curl_H(H)
     # E[source_pos] += source_val
     # H -= courant_number * curl_E(E)
@@ -119,8 +136,3 @@ if __name__ == "__main__":
 
     w = WaveEquation((n, n, n), 0.1, source)
     fiddle.fiddle(w, [('field component',{'Ex':0,'Ey':1,'Ez':2, 'Hx':3,'Hy':4,'Hz':5}),('slice',{'XY':2,'YZ':0,'XZ':1}),('slice index',0,n-1,n//2,1)], update_interval=0.01)
-
-
-    subproc.kill()
-    shm_mm.close()
-

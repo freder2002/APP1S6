@@ -6,8 +6,16 @@
 #include <atomic>
 #include <algorithm>
 #include <chrono>
+#include <sys/shm.h>
+#include <sys/mman.h>
+#include <sys/fcntl.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <unistd.h>
+#include <string.h>
 
-#define print(t) std::cout << t
+#define print(t) std::cerr << t
 #define THREAD_COUNT 8
 // Thread count is per field
 
@@ -32,9 +40,16 @@ private:
 
         int rows_per_thread = this->size_x / THREAD_COUNT;
         for (int i = 0; i < THREAD_COUNT - 1; i++) {
-            thread_list.push_back(std::thread(this->thread_cpt, this, i*rows_per_thread, rows_per_thread, thread_op_add));
+            int start_row = i*rows_per_thread;
+            thread_list.push_back(std::thread([this, start_row, rows_per_thread, thread_op_add] {
+                this->thread_cpt(start_row, rows_per_thread, thread_op_add);
+            }));
         }
-        thread_list.push_back(std::thread(this->thread_cpt, this, (THREAD_COUNT - 1)*rows_per_thread, rows_per_thread + this->size_x % THREAD_COUNT, thread_op_add));
+        int start_row = (THREAD_COUNT - 1)*rows_per_thread;
+        rows_per_thread += this->size_x % THREAD_COUNT;
+        thread_list.push_back(std::thread([this, start_row, rows_per_thread, thread_op_add] {
+                this->thread_cpt(start_row, rows_per_thread, thread_op_add);
+        }));
 
         std::for_each(thread_list.begin(), thread_list.end(), [](std::thread &t) { t.join(); });
     }
@@ -50,6 +65,7 @@ public:
         this->size_z = size_z;
         this->threadable = threadable;
         this->array_field = new T[this->size()];
+        memset(this->array_field, 0, this->size() * sizeof(T));
     }
 
     ~ScalarField() { 
@@ -332,29 +348,123 @@ public:
 
 };
 
+///// imported
+// Taille de la matrice de travail (un côté)
+static const int MATRIX_SIZE = 100;
+static const int BUFFER_SIZE = MATRIX_SIZE * MATRIX_SIZE * MATRIX_SIZE * sizeof(double) * 3 * 2;
+// Tampon générique à utiliser pour créer le fichier
+char buffer_[BUFFER_SIZE];
+
+void wait_signal()
+{
+    // Attend une entrée (ligne complète avec \n) sur stdin.
+    std::string msg;
+    std::cin >> msg;
+    std::cerr << "CPP: Got signal." << std::endl;
+}
+
+void ack_signal()
+{
+    // Répond avec un message vide.
+    std::cout << "" << std::endl;
+}
+///// imported
+
+void churros()
+{
+    int n = MATRIX_SIZE;
+    // VectorField<double>* v = new VectorField<double>(n, n, n, true);
+
+    // auto start = std::chrono::high_resolution_clock::now();
+    // VectorField<double>* c = v->curl();
+    // auto stop = std::chrono::high_resolution_clock::now();
+    // auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+
+    // std::cout << "Time taken with threading: " << duration.count() << " microseconds" << std::endl;
+
+    // VectorField<double>* v2 = new VectorField<double>(n, n, n, false);
+
+    // start = std::chrono::high_resolution_clock::now();
+    // VectorField<double>* c2 = v->curl();
+    // stop = std::chrono::high_resolution_clock::now();
+    // duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+
+    // std::cout << "Time taken without threading: " << duration.count() << " microseconds" << std::endl;
+
+}
+
 int main(int argc, char** argv) {
-    print("Hello World\n");
+    // print("Hello World\n");
     int n = 100;
+    //  pogne matrice
 
-    VectorField<float>* v = new VectorField<float>(n, n, n, true);
+   if (argc < 2)
+    {
+        std::cerr << "Error : no shared file provided as argv[1]" << std::endl;
+        return -1;
+    }
 
-    auto start = std::chrono::high_resolution_clock::now();
-    VectorField<float>* c = v->curl();
-    auto stop = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+    wait_signal();
 
-    std::cout << "Time taken with threading: " << duration.count() << " microseconds" << std::endl;
+    // Création d'un fichier "vide" (le fichier doit exister et être d'une
+    // taille suffisante avant d'utiliser mmap).
+    memset(buffer_, 0, BUFFER_SIZE);
+    FILE* shm_f = fopen(argv[1], "w");
+    fwrite(buffer_, sizeof(char), BUFFER_SIZE, shm_f);
+    fclose(shm_f);
 
-    VectorField<float>* v2 = new VectorField<float>(n, n, n, false);
+    
 
-    start = std::chrono::high_resolution_clock::now();
-    VectorField<float>* c2 = v->curl();
-    stop = std::chrono::high_resolution_clock::now();
-    duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
+    // On signale que le fichier est prêt.
+    std::cerr << "CPP:  File ready." << std::endl;
+    ack_signal();
 
-    std::cout << "Time taken without threading: " << duration.count() << " microseconds" << std::endl;
+    // On ré-ouvre le fichier et le passe à mmap(...). Le fichier peut ensuite
+    // être fermé sans problèmes (mmap y a toujours accès, jusqu'à munmap.)
+    int shm_fd = open(argv[1], O_RDWR);
+    void* shm_mmap = mmap(NULL, BUFFER_SIZE, PROT_WRITE | PROT_READ, MAP_SHARED, shm_fd, 0);
+    close(shm_fd);
+
+    if (shm_mmap == MAP_FAILED) {
+        std::cerr << "ERROR SHM\n";
+        perror(NULL);
+        return -1;
+    }
+
+    wait_signal();
+    double*courant_number = 0;
+    double *source_pos = 0;
+    double *source_val = 0;
+    memcpy(courant_number,&buffer_[0], sizeof(double));
+    memcpy(source_pos,&buffer_[0], sizeof(double) * 4);
+    memcpy(source_val,&buffer_[0], sizeof(double));
+    std::cout << courant_number << std::endl;
+    std::cout << source_pos << std::endl;
+    std::cout << source_val << std::endl;
+
+    // TODO SET A ZERO
+    VectorField<double> *E = new VectorField<double>(MATRIX_SIZE,MATRIX_SIZE,MATRIX_SIZE);
+    VectorField<double> *F = new VectorField<double>(MATRIX_SIZE,MATRIX_SIZE,MATRIX_SIZE);
+
+
+    int i = 0;
+    while (true)
+    {
+        wait_signal();
+        
+        E->i[i][i] =100.0;
+        // E += courant_number * F->curl();
+        // F -= courant_number * E->curl();
+
+        std::cerr << "CPP: Work done." << std::endl;
+        // ack_signal();
+        i++;
+    }
+    
 
     //c->i->debug_print();
+    munmap(shm_mmap, BUFFER_SIZE);
+    return 0;
 }
 
 /*
