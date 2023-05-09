@@ -26,3 +26,8 @@ target_link_libraries(lab_ex3 pthread)
 # Lab - executable pour partie Python
 add_executable(lab_ex4 src/lab_ex4.cpp)
 target_link_libraries(lab_ex4 pthread)
+
+
+# APP - executable pour partie APP
+add_executable(app src/app.cpp)
+target_link_libraries(app pthread)
