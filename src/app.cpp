@@ -28,27 +28,33 @@ private:
     bool threadable;
     T* thread_source;
 
-    void thread_cpt(int start_row, int row_count, bool thread_op_add) {
-        if (thread_op_add)
+    void thread_cpt(int start_row, int row_count, int thread_op) {
+        if (thread_op == 0)
             for(int i = start_row; i < (start_row + row_count); i++) array_field[i] += thread_source[i];
-        else
+        else if (thread_op == 1)
             for(int i = start_row; i < (start_row + row_count); i++) array_field[i] -= thread_source[i];
+        else if (thread_op == 2)
+            for(int i = start_row; i < (start_row + row_count); i++) array_field[i] *= thread_source[i];
+    
     }
 
-    void thread_compute(T* source, bool thread_op_add) {
+    void thread_compute(T* source, int thread_op) {
         std::vector<std::thread> thread_list;
+
+        delete[] thread_source;
+        thread_source = source;
 
         int rows_per_thread = this->size_x / THREAD_COUNT;
         for (int i = 0; i < THREAD_COUNT - 1; i++) {
             int start_row = i*rows_per_thread;
-            thread_list.push_back(std::thread([this, start_row, rows_per_thread, thread_op_add] {
-                this->thread_cpt(start_row, rows_per_thread, thread_op_add);
+            thread_list.push_back(std::thread([this, start_row, rows_per_thread, thread_op] {
+                this->thread_cpt(start_row, rows_per_thread, thread_op);
             }));
         }
         int start_row = (THREAD_COUNT - 1)*rows_per_thread;
         rows_per_thread += this->size_x % THREAD_COUNT;
-        thread_list.push_back(std::thread([this, start_row, rows_per_thread, thread_op_add] {
-                this->thread_cpt(start_row, rows_per_thread, thread_op_add);
+        thread_list.push_back(std::thread([this, start_row, rows_per_thread, thread_op] {
+                this->thread_cpt(start_row, rows_per_thread, thread_op);
         }));
 
         std::for_each(thread_list.begin(), thread_list.end(), [](std::thread &t) { t.join(); });
@@ -65,7 +71,7 @@ public:
         this->size_z = size_z;
         this->threadable = threadable;
         this->array_field = new T[this->size()];
-        memset(this->array_field, 0, this->size() * sizeof(T));
+        empty();
     }
 
     ~ScalarField() { 
@@ -80,17 +86,21 @@ public:
         return this; 
     }
 
+    void empty() {
+        memset(this->array_field, 0, this->size() * sizeof(T));
+    }
+
     void debug_print() {
         for (int z = 0; z < size_z; z++) {
-            std::cout << "[";
+            std::cerr << "[";
             for (int y = 0; y < size_y; y++) {
-                std::cout << "    [";
+                std::cerr << "    [";
                 for (int x = 0; x < size_y; x++) {
-                    std::cout << array_field[x + (size_x * (y + (size_y * z)))] << ", ";
+                    std::cerr << array_field[x + (size_x * (y + (size_y * z)))] << ", ";
                 }
-                std::cout << "],\n";
+                std::cerr << "],\n";
             }
-            std::cout << "],\n";
+            std::cerr << "],\n";
         }
     }
 
@@ -156,16 +166,27 @@ public:
         return slice(0, -1, y_index, y_index, z_index, z_index);
     }
 
-    ScalarField<T>* prepend_x(T default_value) {
+    ScalarField<T>* prepend_x(T default_value, bool forward = true) {
         T* new_array = new T[(size_x + 1) * size_y * size_z];
         size_t sx = sizeof(T)*size_x;
 
-        for (int z = 0; z < size_z; z++) {
-            for (int y = 0; y < size_y; y++) {
-                int idx_dest = (size_x + 1) * (y + (size_y * z));
-                int idx_src = size_x * (y + (size_y * z));
-                memcpy(&new_array[idx_dest+1], &array_field[idx_src], sx);
-                new_array[idx_dest] = default_value;
+        if (forward) {
+            for (int z = 0; z < size_z; z++) {
+                for (int y = 0; y < size_y; y++) {
+                    int idx_dest = (size_x + 1) * (y + (size_y * z));
+                    int idx_src = size_x * (y + (size_y * z));
+                    memcpy(&new_array[idx_dest+1], &array_field[idx_src], sx);
+                    new_array[idx_dest] = default_value;
+                }
+            }
+        } else {
+            for (int z = 0; z < size_z; z++) {
+                for (int y = 0; y < size_y; y++) {
+                    int idx_dest = (size_x + 1) * (y + (size_y * z));
+                    int idx_src = size_x * (y + (size_y * z));
+                    memcpy(&new_array[idx_dest], &array_field[idx_src], sx);
+                    new_array[idx_dest + size_x] = default_value;
+                }
             }
         }
 
@@ -175,16 +196,27 @@ public:
         return this;
     }
 
-    ScalarField<T>* prepend_y(T default_value) {
+    ScalarField<T>* prepend_y(T default_value, bool forward = true) {
         T* new_array = new T[size_x * (size_y + 1) * size_z];
         size_t sx = sizeof(T)*size_x;
 
-        for (int z = 0; z < size_z; z++) {
-            memset(&new_array[(size_y + 1) * z], default_value, sx);
-            for (int y = 1; y < size_y + 1; y++) {
-                int idx_dest = size_x * (y + ((size_y + 1) * z));
-                int idx_src = size_x * (y + (size_y * z));
-                memcpy(&new_array[idx_dest], &array_field[idx_src], sx);
+        if (forward) {
+            for (int z = 0; z < size_z; z++) {
+                memset(&new_array[(size_y + 1) * z], default_value, sx);
+                for (int y = 1; y < size_y + 1; y++) {
+                    int idx_dest = size_x * (y + ((size_y + 1) * z));
+                    int idx_src = size_x * (y + (size_y * z));
+                    memcpy(&new_array[idx_dest], &array_field[idx_src], sx);
+                }
+            }
+        } else {
+            for (int z = 0; z < size_z; z++) {
+                for (int y = 0; y < size_y; y++) {
+                    int idx_dest = size_x * (y + ((size_y + 1) * z));
+                    int idx_src = size_x * (y + (size_y * z));
+                    memcpy(&new_array[idx_dest], &array_field[idx_src], sx);
+                }
+                memset(&new_array[size_x * (size_y + ((size_y + 1) * z))], default_value, sx);
             }
         }
 
@@ -194,17 +226,28 @@ public:
         return this;
     }
 
-    ScalarField<T>* prepend_z(T default_value) {
+    ScalarField<T>* prepend_z(T default_value, bool forward = true) {
         T* new_array = new T[size_x * size_y * (size_z + 1)];
         size_t sx = sizeof(T)*size_x;
 
-        memset(&new_array[0], default_value, sx*size_y);
-        for (int z = 1; z < size_z + 1; z++) {
-            for (int y = 0; y < size_y; y++) {
-                int idx_dest = size_x * (y + (size_y * z));
-                int idx_src = idx_dest - (size_y * size_x);
-                memcpy(&new_array[idx_dest], &array_field[idx_src], sx);
+        if(forward) {
+            memset(&new_array[0], default_value, sx*size_y);
+            for (int z = 1; z < size_z + 1; z++) {
+                for (int y = 0; y < size_y; y++) {
+                    int idx_dest = size_x * (y + (size_y * z));
+                    int idx_src = idx_dest - (size_y * size_x);
+                    memcpy(&new_array[idx_dest], &array_field[idx_src], sx);
+                }
             }
+        } else {
+            for (int z = 0; z < size_z; z++) {
+                for (int y = 0; y < size_y; y++) {
+                    int idx_dest = size_x * (y + (size_y * z));
+                    int idx_src = idx_dest - (size_y * size_x);
+                    memcpy(&new_array[idx_dest], &array_field[idx_src], sx);
+                }
+            }
+            memset(&new_array[size_z], default_value, sx*size_y);
         }
 
         delete[] array_field;
@@ -213,29 +256,29 @@ public:
         return this;
     }
 
-    ScalarField<T>* dx() const {
+    ScalarField<T>* dx(bool forward = true) const {
         ScalarField<T>* sl = slice(1, -1, 0, -1, 0, -1);
         ScalarField<T>* sl_t = slice(0, -2, 0, -1, 0, -1);
         sl->operator-=(*sl_t);
-        sl->prepend_x(0);
+        sl->prepend_x(0, forward);
         delete sl_t;
         return sl;
         //return &((*slice(1, -1, 0, -1, 0, -1)) - (*slice(0, -2, 0, -1, 0, -1)));
     }
-    ScalarField<T>* dy() const {
+    ScalarField<T>* dy(bool forward = true) const {
         ScalarField<T>* sl = slice(0, -1, 1, -1, 0, -1);
         ScalarField<T>* sl_t = slice(0, -1, 0, -2, 0, -1);
         sl->operator-=(*sl_t);
-        sl->prepend_y(0);
+        sl->prepend_y(0, forward);
         delete sl_t;
         return sl;
         //return &((*slice(0, -1, 1, -1, 0, -1)) - (*slice(0, -1, 0, -2, 0, -1)));
     }
-    ScalarField<T>* dz() const {
+    ScalarField<T>* dz(bool forward = true) const {
         ScalarField<T>* sl = slice(0, -1, 0, -1, 1, -1);
         ScalarField<T>* sl_t = slice(0, -1, 0, -1, 0, -2);
         sl->operator-=(*sl_t);
-        sl->prepend_z(0);
+        sl->prepend_z(0, forward);
         delete sl_t;
         return sl;
         //return &((*slice(0, -1, 0, -1, 1, -1)) - (*slice(0, -1, 0, -1, 0, -2)));
@@ -256,7 +299,7 @@ public:
 
     ScalarField<T>& operator+= (const ScalarField<T>& s) {
         if(threadable) 
-            thread_compute(s.array_field, true);
+            thread_compute(s.array_field, 0);
         else {
             int sz = this->size();
             for(int i = 0; i < sz; i++) {
@@ -268,10 +311,65 @@ public:
 
     ScalarField<T>& operator-= (const ScalarField<T>& s) {
         if(threadable) 
-            thread_compute(s.array_field, false);
+            thread_compute(s.array_field, 1);
         else {
             int sz = this->size();
             for(int i = 0; i < sz; i++) array_field[i] -= s[i];
+        }
+        return *this;
+    }
+
+    ScalarField<T>& operator*= (const ScalarField<T>& s) {
+        if(threadable) 
+            thread_compute(s.array_field, 2);
+        else {
+            int sz = this->size();
+            for(int i = 0; i < sz; i++) array_field[i] *= s[i];
+        }
+        return *this;
+    }
+
+    ScalarField<T>& operator+= (const T& s) {
+        if(threadable) {
+            T* source = new T[this->size()];
+            memset(source, s, sizeof(T)*this->size());
+            thread_compute(source, 0);
+        }
+        else {
+            int sz = this->size();
+            for(int i = 0; i < sz; i++) {
+                array_field[i] += s;
+            }
+        }
+        return *this;
+    }
+
+    ScalarField<T>& operator-= (const T& s) {
+        if(threadable) {
+            T* source = new T[this->size()];
+            memset(source, s, sizeof(T)*this->size());
+            thread_compute(source, 1);
+        }
+        else {
+            int sz = this->size();
+            for(int i = 0; i < sz; i++) {
+                array_field[i] -= s;
+            }
+        }
+        return *this;
+    }
+
+    ScalarField<T>& operator*= (const T& s) {
+        if(threadable) {
+            T* source = new T[this->size()];
+            memset(source, s, sizeof(T)*this->size());
+            thread_compute(source, 2);
+        }
+        else {
+            int sz = this->size();
+            for(int i = 0; i < sz; i++) {
+                array_field[i] *= s;
+            }
         }
         return *this;
     }
@@ -311,15 +409,15 @@ public:
 
     int size() { return size_x * size_y * size_z; }
 
-    VectorField<T>* curl() {
-        VectorField<T>* vf = this->copy();
+    VectorField<T>* curl(bool forward = true) {
+        VectorField<T>* vf = new VectorField<T>(size_x, size_y, size_z, threadable);
 
-        ScalarField<T>* kdy = vf->k->dy();
-        ScalarField<T>* jdz = vf->j->dz();
-        ScalarField<T>* idz = vf->i->dz();
-        ScalarField<T>* kdx = vf->k->dx();
-        ScalarField<T>* jdx = vf->j->dx();
-        ScalarField<T>* idy = vf->i->dy();
+        ScalarField<T>* kdy = this->k->dy(forward);
+        ScalarField<T>* jdz = this->j->dz(forward);
+        ScalarField<T>* idz = this->i->dz(forward);
+        ScalarField<T>* kdx = this->k->dx(forward);
+        ScalarField<T>* jdx = this->j->dx(forward);
+        ScalarField<T>* idy = this->i->dy(forward);
 
         vf->i->operator+=(*kdy);
         vf->i->operator-=(*jdz);
@@ -344,6 +442,54 @@ public:
         vf->j = this->j->copy();
         vf->k = this->k->copy();
         return vf;
+    }
+
+    VectorField<T>& operator+= (const VectorField<T>& s) {
+        this->i->operator+=(*s.i);
+        this->j->operator+=(*s.j);
+        this->k->operator+=(*s.k);
+        return *this;
+    }
+
+    VectorField<T>& operator-= (const VectorField<T>& s) {
+        this->i->operator-=(*s.i);
+        this->j->operator-=(*s.j);
+        this->k->operator-=(*s.k);
+        return *this;
+    }
+
+    VectorField<T>& operator*= (const VectorField<T>& s) {
+        this->i->operator*=(*s.i);
+        this->j->operator*=(*s.j);
+        this->k->operator*=(*s.k);
+        return *this;
+    }
+
+    VectorField<T>& operator+= (const T& s) {
+        this->i->operator+=(s);
+        this->j->operator+=(s);
+        this->k->operator+=(s);
+        return *this;
+    }
+    
+    VectorField<T>& operator-= (const T& s) {
+        this->i->operator-=(s);
+        this->j->operator-=(s);
+        this->k->operator-=(s);
+        return *this;
+    }
+
+    VectorField<T>& operator*= (const T& s) {
+        this->i->operator*=(s);
+        this->j->operator*=(s);
+        this->k->operator*=(s);
+        return *this;
+    }
+
+    void empty() {
+        this->i->empty();
+        this->j->empty();
+        this->k->empty();
     }
 
 };
@@ -453,14 +599,45 @@ int main(int argc, char** argv) {
     while (true)
     {
         wait_signal();
+
+        courant_number = mtx[0];
+        source_pos_x = mtx[1];
+        source_pos_y = mtx[2];
+        source_pos_z = mtx[3];
+        source_pos_m = mtx[4];
+        source_val = mtx[5];
+
+        VectorField<double>* tmp_F = F->curl();
+        tmp_F->operator*=(courant_number);
+        E->operator+=(*tmp_F);
+
+        int source_pos = source_pos_x + (E->size_x * (source_pos_y + (E->size_y * source_pos_z)));
+        E->i->operator[](source_pos) += source_val;
+
+        VectorField<double>* tmp_E = E->curl(false);
+        tmp_E->operator*=(courant_number);
+        F->operator-=(*tmp_E);
         
-        E->i->operator[](i) = 100.0;
+        delete tmp_E;
+        delete tmp_F;
+
+        // E->i->operator[](i) = 100.0;
         // E += courant_number * F->curl();
         // F -= courant_number * E->curl();
+        
 
         memcpy(&mtx[0], E->i->arr(), E->i->size()*sizeof(double));
         memcpy(&mtx[E->i->size()], E->j->arr(), E->j->size()*sizeof(double));
         memcpy(&mtx[E->i->size()+E->j->size()], E->k->arr(), E->k->size()*sizeof(double));
+        memcpy(&mtx[E->i->size()+E->j->size()+E->k->size()], F->i->arr(), F->i->size()*sizeof(double));
+        memcpy(&mtx[E->i->size()+E->j->size()+E->k->size()+F->i->size()], F->j->arr(), F->j->size()*sizeof(double));
+        memcpy(&mtx[E->i->size()+E->j->size()+E->k->size()+F->i->size()+F->j->size()], F->k->arr(), F->k->size()*sizeof(double));
+
+        double* arr = E->j->arr();
+        int ind = 505050;
+        for (int i = 0; i < 100; i++)
+            std::cerr << "[" << mtx[E->i->size()+i] << "," << arr[i] << "], ";
+        std::cerr << std::endl;
 
         std::cerr << "CPP: Work done." << std::endl;
         ack_signal();

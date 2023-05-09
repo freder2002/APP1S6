@@ -17,13 +17,16 @@
 
 namespace gif643
 {
+    // ICI
 
-std::mutex mutex;
-std::condition_variable data_condition;
+    std::mutex mutex;
+    std::mutex mutex3;
+    std::mutex mutex_runner;
+    std::condition_variable data_condition;
 
     const size_t BPP = 4;         // Bytes per pixel
     const float ORG_WIDTH = 48.0; // Original SVG image width in px.
-    const int NUM_THREADS = 24;    // Default value, changed by argv.
+    const int NUM_THREADS = 1;    // Default value, changed by argv.
 
     using PNGDataVec = std::vector<char>;
     using PNGDataPtr = std::shared_ptr<PNGDataVec>;
@@ -109,6 +112,17 @@ std::condition_variable data_condition;
         std::string fname_in;
         std::string fname_out;
         int size;
+
+        // ICI
+
+        std::string inputParam()
+        {
+            return fname_in + std::to_string(size);
+        }
+        std::string get_fname_out()
+        {
+            return fname_out;
+        }
     };
 
     /// \brief A class representing the processing of one SVG file to a PNG stream.
@@ -119,11 +133,12 @@ std::condition_variable data_condition;
     {
     private:
         TaskDef task_def_;
-        std::mutex mutex_runner;
+        PNGDataPtr data_blob;
 
     public:
         TaskRunner(const TaskDef &task_def) : task_def_(task_def)
         {
+            task_def_ = task_def;
         }
 
         void operator()()
@@ -144,11 +159,10 @@ std::condition_variable data_condition;
             NSVGimage *image_in = nullptr;
             NSVGrasterizer *rast = nullptr;
 
-         
             try
             {
-                std::lock_guard<std::mutex>  lock(mutex_runner);
                 // Read the file ...
+                std::lock_guard<std::mutex> lock(mutex_runner);
                 image_in = nsvgParseFromFile(fname_in.c_str(), "px", 0);
                 if (image_in == nullptr)
                 {
@@ -172,13 +186,14 @@ std::condition_variable data_condition;
                 // Compress it ...
                 PNGWriter writer;
                 writer(width, height, BPP, &image_data[0], stride);
+                data_blob = writer.getData();
+
+                // Used to save to the cache
 
                 // Write it out ...
                 std::ofstream file_out(fname_out, std::ofstream::binary);
                 auto data = writer.getData();
                 file_out.write(&(data->front()), data->size());
-
-                // add to hash map
             }
             catch (std::runtime_error e)
             {
@@ -198,6 +213,10 @@ std::condition_variable data_condition;
                       << fname_in
                       << "."
                       << std::endl;
+        }
+        PNGDataPtr getDataBlob()
+        {
+            return data_blob;
         }
     };
 
@@ -265,7 +284,6 @@ std::condition_variable data_condition;
                 data_condition.notify_all();
                 qthread.join();
             }
-            
         }
 
         /// \brief Parse a task definition string and fills the references TaskDef
@@ -315,14 +333,8 @@ std::condition_variable data_condition;
             TaskDef def;
             if (parse(line_org, def))
             {
-                std::string str = def.fname_in + def.fname_out + std::to_string(def.size);
-                if(png_cache_.find(str) == png_cache_.end())
-                {
-                std::cerr << "f" << std::endl;
                 TaskRunner runner(def);
                 runner();
-                }
-                
             }
         }
 
@@ -330,15 +342,15 @@ std::condition_variable data_condition;
         ///
         /// If the definition is invalid, error messages are sent to stderr and
         /// nothing is queued.
-        // # producteur
-        void parseAndQueue(const std::string &line_org)
+        void
+        parseAndQueue(const std::string &line_org)
         {
             std::queue<TaskDef> queue;
             TaskDef def;
+            std::lock_guard<std::mutex> lock(mutex);
             if (parse(line_org, def))
             {
                 std::cerr << "Queueing task '" << line_org << "'." << std::endl;
-                std::lock_guard<std::mutex> lock(mutex);
                 task_queue_.push(def);
                 data_condition.notify_one();
             }
@@ -348,7 +360,6 @@ std::condition_variable data_condition;
         bool queueEmpty()
         {
             return task_queue_.empty();
-            exit(0);
         }
 
     private:
@@ -357,23 +368,45 @@ std::condition_variable data_condition;
         {
             while (should_run_)
             {
-
-                std::unique_lock<std::mutex> lock(mutex);
-                data_condition.wait(lock, [&] {return !task_queue_.empty() || !should_run_;});
-               if(should_run_){
+                std::unique_lock<std::mutex> lock(mutex3);
+                data_condition.wait(lock, [this]
+                                    { return !task_queue_.empty() || !should_run_; });
+                if (!should_run_)
+                {
+                    return;
+                }
                 TaskDef task_def = task_queue_.front();
                 task_queue_.pop();
                 lock.unlock();
-                TaskRunner runner(task_def);
-                runner();
-               }
-                
+
+                auto inputParam = task_def.inputParam();
+                auto data = png_cache_.find(inputParam);
+                std::cerr << "Checking cache" << std::to_string(png_cache_.size()) << std::endl;
+                // for (auto x : png_cache_)
+                //     std::cout << x.first << " " << x.second << std::endl;
+
+                if (data != png_cache_.end())
+                {
+                    std::cerr << "Deja fait !" << std::endl;
+
+                    std::ofstream file_out(task_def.get_fname_out(), std::ofstream::binary);
+                    auto data = png_cache_[inputParam];
+                    file_out.write(&(data->front()), data->size());
+                }
+                else
+                {
+                    std::cerr << "did not found it" << std::endl;
+
+                    TaskRunner runner(task_def);
+                    runner();
+
+                    png_cache_[inputParam] = runner.getDataBlob();
+                    std::cerr << std::to_string(png_cache_.size()) << std::endl;
+                }
             }
         }
     };
-
 }
-
 int main(int argc, char **argv)
 {
     using namespace gif643;
@@ -386,10 +419,9 @@ int main(int argc, char **argv)
     {
         char *p;
         int input = strtol(argv[3], &p, 10);
-        
+
         if (input > 0 && input < 48)
             nb_thread = input;
-
 
         std::cout << "NB threads = " << nb_thread << std::endl;
         file_in.open(argv[1]);
@@ -412,7 +444,6 @@ int main(int argc, char **argv)
         std::cerr << "Using stdin (press CTRL-D for EOF)." << std::endl;
     }
 
-    // TODO: change the number of threads from args.
     Processor proc(48);
 
     while (!std::cin.eof())

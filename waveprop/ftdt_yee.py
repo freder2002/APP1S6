@@ -71,8 +71,11 @@ def timestep(E, H, courant_number, source_pos, source_val):
 
 
     signal_and_wait(subproc)
-    E = shared_matrix[0,:,:,:,:]
-    H = shared_matrix[1,:,:,:,:]
+    E = numpy.moveaxis(shared_matrix[0,:,:,:,:], 0, -1)
+    H = numpy.moveaxis(shared_matrix[1,:,:,:,:], 0, -1)
+
+    # print(source_pos)
+    # print(E[:10, :10, 0, 0])
 
     # print(E)
     # print(H)
@@ -80,6 +83,9 @@ def timestep(E, H, courant_number, source_pos, source_val):
     # E += courant_number * curl_H(H)
     # E[source_pos] += source_val
     # H -= courant_number * curl_E(E)
+    
+    # E = numpy.moveaxis(E, 0, -1)
+    # H = numpy.moveaxis(E, 0, -1)
     return E, H
 
 
