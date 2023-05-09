@@ -15,13 +15,13 @@ add_executable(asset_conv src/asset_conv.cpp)
 target_link_libraries(asset_conv nanosvg stb_image pthread)
 
 # Lab
-add_executable(lab_ex1 src/lab_ex1.cpp)
-add_executable(lab_ex2 src/lab_ex2.cpp)
-add_executable(lab_ex3 src/lab_ex3.cpp)
+# add_executable(lab_ex1 src/lab_ex1.cpp)
+# add_executable(lab_ex2 src/lab_ex2.cpp)
+# add_executable(lab_ex3 src/lab_ex3.cpp)
 
-target_link_libraries(lab_ex1 pthread)
-target_link_libraries(lab_ex2 pthread)
-target_link_libraries(lab_ex3 pthread)
+# target_link_libraries(lab_ex1 pthread)
+# target_link_libraries(lab_ex2 pthread)
+# target_link_libraries(lab_ex3 pthread)
 
 # Lab - executable pour partie Python
 add_executable(lab_ex4 src/lab_ex4.cpp)
@@ -31,3 +31,5 @@ target_link_libraries(lab_ex4 pthread)
 # APP - executable pour partie APP
 add_executable(app src/app.cpp)
 target_link_libraries(app pthread)
+# add_executable(lab_ex4 src/lab_ex4.cpp)
+# target_link_libraries(lab_ex4 pthread)
