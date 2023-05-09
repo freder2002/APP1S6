@@ -57,8 +57,6 @@ shm_mm = mmap.mmap(shm_f.fileno(), 0)
 
 def timestep(E, H, courant_number, source_pos, source_val):
     # methode
-    
-    # print(courant_number, source_pos, source_val)
 
     shared_matrix = numpy.ndarray(shape=(2,3,MATRIX_SIZE, MATRIX_SIZE,MATRIX_SIZE), dtype=numpy.float64, buffer=shm_mm)
     # print(shared_matrix)
@@ -73,16 +71,16 @@ def timestep(E, H, courant_number, source_pos, source_val):
 
 
     signal_and_wait(subproc)
-    E = shared_matrix[:,:,:,:,0]
-    H = shared_matrix[:,:,:,:,1]
+    E = shared_matrix[0,:,:,:,:]
+    H = shared_matrix[1,:,:,:,:]
 
-    print(E)
-    print(H)
+    # print(E)
+    # print(H)
     # ancienne methode 
     # E += courant_number * curl_H(H)
     # E[source_pos] += source_val
     # H -= courant_number * curl_E(E)
-    # return E, H
+    return E, H
 
 
 class WaveEquation:

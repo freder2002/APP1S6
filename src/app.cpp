@@ -431,16 +431,18 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    // Pointeur format double qui représente la matrice partagée:
+    double* mtx = (double*)shm_mmap;
+
     wait_signal();
-    double*courant_number = 0;
-    double *source_pos = 0;
-    double *source_val = 0;
-    memcpy(courant_number,&buffer_[0], sizeof(double));
-    memcpy(source_pos,&buffer_[0], sizeof(double) * 4);
-    memcpy(source_val,&buffer_[0], sizeof(double));
-    std::cout << courant_number << std::endl;
-    std::cout << source_pos << std::endl;
-    std::cout << source_val << std::endl;
+    double courant_number = mtx[0];
+    double source_pos_x = mtx[1];
+    double source_pos_y = mtx[2];
+    double source_pos_z = mtx[3];
+    double source_pos_m = mtx[4];
+    double source_val = mtx[5];
+
+    ack_signal();
 
     // TODO SET A ZERO
     VectorField<double> *E = new VectorField<double>(MATRIX_SIZE,MATRIX_SIZE,MATRIX_SIZE);
@@ -452,12 +454,16 @@ int main(int argc, char** argv) {
     {
         wait_signal();
         
-        E->i[i][i] =100.0;
+        E->i->operator[](i) = 100.0;
         // E += courant_number * F->curl();
         // F -= courant_number * E->curl();
 
+        memcpy(&mtx[0], E->i->arr(), E->i->size()*sizeof(double));
+        memcpy(&mtx[E->i->size()], E->j->arr(), E->j->size()*sizeof(double));
+        memcpy(&mtx[E->i->size()+E->j->size()], E->k->arr(), E->k->size()*sizeof(double));
+
         std::cerr << "CPP: Work done." << std::endl;
-        // ack_signal();
+        ack_signal();
         i++;
     }
     
